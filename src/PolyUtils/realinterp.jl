@@ -11,12 +11,15 @@ on a domain.
 function interpolate(
     dom::Domain{T},
     d::Int;
+    constraint_degs::Vector{Int} = [],
     calc_V::Bool = false,
     get_quadr::Bool = false,
     sample = nothing,
     sample_factor::Int = 0,
     ) where {T <: Real}
     @assert d >= 1
+    @assert all(constraint_degs .>= 0)
+    @assert all(2d - degree(dom) .>= constraint_degs)
     n = dimension(dom)
     U = binomial(n + 2d, n)
 
@@ -39,9 +42,9 @@ function interpolate(
                 end
             end
         end
-        return interp_sample(dom, d, get_quadr, sample_factor)
+        return interp_sample(dom, d, constraint_degs, get_quadr, sample_factor)
     else
-        return interp_box(dom, n, d, calc_V, get_quadr)
+        return interp_box(dom, n, d, constraint_degs, calc_V, get_quadr)
     end
 end
 
@@ -52,19 +55,32 @@ get_U(n::Int, d::Int) = binomial(n + 2d, n)
 function interp_sample(
     dom::Domain{T},
     d::Int,
+    constraint_degs::Vector{Int},
     get_quadr::Bool,
     sample_factor::Int,
     ) where {T <: Real}
-    U = get_U(dimension(dom), d)
+    n = dimension(dom)
+    U = get_U(n, d)
 
     cand_pts = sample(dom, U * sample_factor)
     (pts, P0, P0sub, V, w) = make_wsos_arrays(dom, cand_pts, d, get_quadr)
 
-    g = weights(dom, pts)
-    PWts = Matrix{T}[sqrt.(gi) .* P0sub for gi in g]
+    sqrtg = [sqrt.(gi) for gi in weights(dom, pts)]
+    PWts = Matrix{T}[gi .* P0sub for gi in sqrtg]
     Ps = Matrix{T}[P0, PWts...]
 
-    return (U = U, pts = pts, Ps = Ps, V = V, w = w)
+    deg_weights = Dict(0 => Ps)
+    constraint_Ps = similar(constraint_degs, Vector{Matrix{T}})
+    for (i, deg) in enumerate(constraint_degs)
+        if !haskey(deg_weights, deg)
+            Lsub = get_L(n, div(2d - degree(dom) - deg, 2))
+            deg_weights[deg] = Matrix{T}[view(P0, :, 1:get_L(n, div(2d - deg, 2))),
+                                         [gi .* view(P0, :, 1:Lsub) for gi in sqrtg]...]
+        end
+        constraint_Ps[i] = deg_weights[deg]
+    end
+
+    return (U = U, pts = pts, Ps = Ps, constraint_Ps = constraint_Ps, V = V, w = w)
 end
 
 # slow but high-quality hyperrectangle/box point selections
@@ -73,17 +89,23 @@ function interp_box(
     dom::FreeDomain{T},
     n::Int,
     d::Int,
+    constraint_degs::Vector{Int},
     calc_V::Bool,
     get_quadr::Bool,
     ) where {T <: Real}
+    @assert all(2d .>=- constraint_degs)
     (U, pts, P0, P0sub, V, w) = interp_box(T, n, d, calc_V, get_quadr)
-    return (U = U, pts = pts, Ps = Matrix{T}[P0,], V = V, w = w)
+    return (U = U, pts = pts, Ps = Matrix{T}[P0,],
+        constraint_Ps = [Matrix{T}[view(P0, :, 1:get_L(n, div(2d - deg, 2))),]
+                         for deg in constraint_degs],
+        V = V, w = w)
 end
 
 function interp_box(
     dom::BoxDomain{T},
     n::Int,
     d::Int,
+    constraint_degs::Vector{Int},
     calc_V::Bool,
     get_quadr::Bool,
     ) where {T <: Real}
@@ -91,15 +113,27 @@ function interp_box(
 
     # TODO refactor/cleanup below
     # scale and shift points, get WSOS matrices
-    pscale = [T(0.5) * (dom.u[mod(j - 1, dimension(dom)) + 1] -
+    pscale = [T(0.5) * (dom.u[mod(j - 1, n) + 1] -
         dom.l[mod(j - 1, dimension(dom)) + 1]) for j in 1:n]
-    pshift = [T(0.5) * (dom.u[mod(j - 1, dimension(dom)) + 1] +
+    pshift = [T(0.5) * (dom.u[mod(j - 1, n) + 1] +
         dom.l[mod(j - 1, dimension(dom)) + 1]) for j in 1:n]
     @views Wtsfun = (j -> sqrt.(1 .- abs2.(pts[:, j])) * pscale[j])
-    PWts = Matrix{T}[Wtsfun(j) .* P0sub for j in 1:dimension(dom)]
-    trpts = pts .* pscale' .+ pshift'
+    PWts = Matrix{T}[Wtsfun(j) .* P0sub for j in 1:n]
+    Ps = Matrix{T}[P0, PWts...]
 
-    return (U = U, pts = trpts, Ps = Matrix{T}[P0, PWts...], V = V, w = w)
+    deg_weights = Dict(0 => Ps)
+    constraint_Ps = similar(constraint_degs, Vector{Matrix{T}})
+    for (i, deg) in enumerate(constraint_degs)
+        if !haskey(deg_weights, deg)
+            Lsub = get_L(n, div(2d - degree(dom) - deg, 2))
+            deg_weights[deg] = Matrix{T}[view(P0, :, 1:get_L(n, div(2d - deg, 2))),
+                                         [Wtsfun(j) .* view(P0, :, 1:Lsub) for j in 1:n]...]
+        end
+        constraint_Ps[i] = deg_weights[deg]
+    end
+
+    trpts = pts .* pscale' .+ pshift'
+    return (U = U, pts = trpts, Ps = Ps, constraint_Ps = constraint_Ps, V = V, w = w)
 end
 
 function interp_box(
