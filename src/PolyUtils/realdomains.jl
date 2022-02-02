@@ -101,6 +101,59 @@ function weights(dom::BoxDomain{T}, pts::AbstractMatrix{T}) where {T <: Real}
 end
 
 
+"""
+$(TYPEDEF)
+
+Hyperbox ``x ∈ [l, u]`` with lower bounds `l::Vector{T}` and upper bounds
+`u::Vector{T}` and additional constraint functions.
+"""
+mutable struct CustomBoxDomain{T <: Real} <: PolyUtils.Domain{T}
+    l::Vector{T}
+    u::Vector{T}
+    gs::Vector{Function}
+    deg::Int
+
+    function CustomBoxDomain{T}(l::Vector{<:Real}, u::Vector{<:Real}, gs::Vector{Function}, deg::Int) where {T <: Real}
+        @assert length(l) == length(u)
+        dom = new{T}()
+        dom.l = l
+        dom.u = u
+        dom.gs = gs
+        dom.deg = max(deg, 2)
+        return dom
+    end
+end
+
+dimension(dom::CustomBoxDomain) = length(dom.l)
+
+function sample(dom::CustomBoxDomain{T}, npts::Int) where {T <: Real}
+    dim = dimension(dom)
+    pts = Vector{Vector{T}}(undef, npts)
+    shift = (dom.u + dom.l) .* T(0.5)
+    scale = dom.u - dom.l
+    k = 0
+    randbox() = (rand(T, dim) .- T(0.5)) .* scale .+ shift
+    while k < npts
+        x = randbox()
+        if all(g -> g(x...) > zero(T), dom.gs)
+           k += 1
+           pts[k] = x
+        end
+    end
+    return reduce(vcat, transpose.(pts))::Matrix{T}
+end
+
+degree(dom::CustomBoxDomain) = dom.deg
+
+function weights(dom::CustomBoxDomain{T}, pts::AbstractMatrix{T}) where {T <: Real}
+   transpts = similar(transpose(pts))
+   transpose!(transpts, pts)
+   @views g = vcat([(pts[:, i] .- dom.l[i]) .* (dom.u[i] .- pts[:, i]) for i in 1:size(pts, 2)],
+                   [[g(transpts[:, i]...) for i in 1:size(transpts, 2)] for g in dom.gs])
+   @assert all(all(gi .>= 0) for gi in g)
+   return g::Vector{Vector{T}}
+end
+
 # for hyperball and hyperellipse
 function ball_sample(dom::Domain{T}, npts::Int) where {T <: Real}
     dim = dimension(dom)
