@@ -11,7 +11,7 @@ on a domain.
 function interpolate(
     dom::Domain{T},
     d::Int;
-    constraint_degs::Vector{Int} = [],
+    constraint_degs::Vector{Int} = Int[],
     calc_V::Bool = false,
     get_quadr::Bool = false,
     sample = nothing,
