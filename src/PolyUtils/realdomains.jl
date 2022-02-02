@@ -107,7 +107,7 @@ $(TYPEDEF)
 Hyperbox ``x ∈ [l, u]`` with lower bounds `l::Vector{T}` and upper bounds
 `u::Vector{T}` and additional constraint functions.
 """
-mutable struct CustomBoxDomain{T <: Real} <: PolyUtils.Domain{T}
+mutable struct CustomBoxDomain{T <: Real} <: Domain{T}
     l::Vector{T}
     u::Vector{T}
     gs::Vector{Function}
